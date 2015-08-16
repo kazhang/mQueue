@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	ID_LENGTH = 10
-	LOG_NAME  = "log_000"
+	ID_LENGTH        = 10
+	CLIENT_ID_LENGHT = 3
+	LOG_NAME         = "log_000"
 )
 
 func init() {
@@ -48,16 +49,25 @@ func Decode(s string) string {
 type MsgServ struct {
 	address        string
 	dataPath       string
-	consumers      []net.Conn
+	consumers      map[string]net.Conn
 	consumer_mutex sync.Mutex
 	toMerge        chan string
 }
 
 func (ms *MsgServ) init() {
 	ms.toMerge = make(chan string)
+	ms.consumers = make(map[string]net.Conn)
 }
 
 func (ms *MsgServ) notify(data []byte) {
+	for id, consumer := range ms.consumers {
+		if _, err := consumer.Write(data); err != nil {
+			log.Printf("connection %s broken\n", id)
+			ms.consumer_mutex.Lock()
+			delete(ms.consumers, id)
+			ms.consumer_mutex.Unlock()
+		}
+	}
 }
 
 func (ms *MsgServ) Run() {
@@ -125,7 +135,12 @@ func (ms *MsgServ) handler(conn net.Conn) {
 
 func (ms *MsgServ) handleSubscription(conn net.Conn) {
 	ms.consumer_mutex.Lock()
-	ms.consumers = append(ms.consumers, conn)
+	id := randString(CLIENT_ID_LENGHT)
+	if _, pre := ms.consumers[id]; pre != false {
+		id = randString(CLIENT_ID_LENGHT)
+	}
+	log.Printf("add connectin %s\n", id)
+	ms.consumers[id] = conn
 	ms.consumer_mutex.Unlock()
 }
 
@@ -144,9 +159,7 @@ func (ms *MsgServ) handleInjection(conn net.Conn) {
 	err = os.Rename(ms.dataPath+tmpId, ms.dataPath+id)
 	logFatal(err)
 
-	log.Println("ready to add new id")
 	ms.toMerge <- id
-	log.Println("added new id")
 
 	_, err = conn.Write([]byte("ack"))
 	logFatal(err)
